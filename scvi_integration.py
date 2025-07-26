@@ -202,16 +202,16 @@ predictions_high_adata = predictions_high.to_adata()
 predictions_high_adata = predictions_high_adata[~predictions_high_adata.obs.index.duplicated(), :]
 
 # celltypist 결과를 adata.obs에 추가
-adata.obs["celltypist_cell_label_coarse"] = predictions_high_adata.obs.loc[adata.obs.index, "majority_voting"]
-adata.obs["celltypist_conf_score_coarse"] = predictions_high_adata.obs.loc[adata.obs.index, "conf_score"]
+adata_scvi.obs["celltypist_cell_label_coarse"] = predictions_high_adata.obs.loc[adata.obs.index, "majority_voting"]
+adata_scvi.obs["celltypist_conf_score_coarse"] = predictions_high_adata.obs.loc[adata.obs.index, "conf_score"]
 
-adata.obs["celltypist_cell_label_coarse"] = predictions_high_adata.obs["majority_voting"]
-adata.obs["celltypist_conf_score_coarse"] = predictions_high_adata.obs["conf_score"]
+adata_scvi.obs["celltypist_cell_label_coarse"] = predictions_high_adata.obs["majority_voting"]
+adata_scvi.obs["celltypist_conf_score_coarse"] = predictions_high_adata.obs["conf_score"]
 
 
 
 sc.pl.umap(
-    adata,
+    adata_scvi,
     color=["celltypist_cell_label_coarse", "celltypist_conf_score_coarse"],
     frameon=False,
     sort_order=False,
