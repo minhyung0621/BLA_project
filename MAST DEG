@@ -1,0 +1,124 @@
+library(SingleCellExperiment)
+library(MAST)
+library(dplyr)
+library(ggplot2)
+
+# ----------------------------------------------------
+# 1. 데이터 불러오기 (절대경로 A)
+# ----------------------------------------------------
+sce <- readRDS("A")
+
+# ----------------------------------------------------
+# 2. Subset (ExN/InhN & mCherry+/eYFP+)
+# ----------------------------------------------------
+sce_filtered <- sce[, 
+    grepl("ExN|InhN", sce$celltypist_cell_label_coarse) &
+    sce$group %in% c("mCherry+", "eYFP+", "None")
+]
+
+# ----------------------------------------------------
+# 3. log-normalization 추가
+# ----------------------------------------------------
+assay(sce_filtered, "logcounts") <- log1p(as.matrix(assay(sce_filtered, "counts")))
+
+# ----------------------------------------------------
+# 4. MAST DEG 함수 (region vs rest, batch 고려)
+# ----------------------------------------------------
+run_MAST_DEG_region <- function(sce_obj, covars=c("sample","version"), test_region="ACC") {
+    if (ncol(sce_obj) == 0) {
+        stop("❌ Subset에 cell이 없습니다. group/region 조건 확인하세요.")
+    }
+    
+    fdata <- data.frame(primerid = rownames(sce_obj))
+    cdata <- as.data.frame(colData(sce_obj))
+    
+    # region factor baseline: rest
+    cdata$region_group <- ifelse(cdata$input_region == test_region, test_region, "rest")
+    cdata$region_group <- relevel(factor(cdata$region_group), ref="rest")
+    
+    sca <- FromMatrix(
+        exprsArray = as.matrix(logcounts(sce_obj)),
+        cData = cdata,
+        fData = fdata
+    )
+    
+    # 모델 공식: region_group + covars
+    formula_str <- paste("~ region_group +", paste(covars, collapse=" + "))
+    zlmCond <- zlm(as.formula(formula_str), sca)
+    
+    contrast_name <- paste0("region_group", test_region)
+    summaryCond <- summary(zlmCond, doLRT = contrast_name)
+    summaryDt <- summaryCond$datatable
+    
+    fcHurdle <- merge(
+        summaryDt[contrast == contrast_name & component == "H", .(primerid, pval = `Pr(>Chisq)`)],
+        summaryDt[contrast == contrast_name & component == "logFC", .(primerid, coef)],
+        by="primerid"
+    )
+    fcHurdle$FDR <- p.adjust(fcHurdle$pval, "fdr")
+    
+    return(fcHurdle)
+}
+
+# ----------------------------------------------------
+# 5. DEG count 함수
+# ----------------------------------------------------
+deg_count <- function(res, fdr_cutoff=0.05, logfc_cutoff=0.25) {
+    sig <- res %>% filter(FDR < fdr_cutoff & abs(coef) > logfc_cutoff)
+    return(nrow(sig))
+}
+
+# ----------------------------------------------------
+# 6. Plot 함수 (log2FC ±0.25 cutoff 색상 구분)
+# ----------------------------------------------------
+plot_volcano <- function(res, title_prefix="") {
+    res <- res %>%
+        mutate(
+            sig = ifelse(FDR < 0.05 & abs(coef) > 0.25,
+                         ifelse(coef > 0.25, "Up", "Down"), "NS")
+        )
+    
+    ggplot(res, aes(x=coef, y=-log10(FDR), color=sig)) +
+        geom_point(alpha=0.6) +
+        scale_color_manual(values=c("Up"="red", "Down"="blue", "NS"="grey")) +
+        geom_hline(yintercept=-log10(0.05), col="black", lty=2) +
+        geom_vline(xintercept=c(-0.25, 0.25), col="black", lty=2) +
+        labs(title=paste(title_prefix, "(sample+version regress out)"),
+             x="log2FC", y="-log10(FDR)") +
+        theme_bw()
+}
+
+plot_qq <- function(res, title_prefix="") {
+    observed <- -log10(sort(res$pval))
+    expected <- -log10(ppoints(length(observed)))
+    ggplot(data.frame(expected, observed), aes(expected, observed)) +
+        geom_point(size=1) +
+        geom_abline(intercept=0, slope=1, col="red") +
+        labs(title=paste(title_prefix, "(sample+version regress out)"),
+             x="Expected -log10(p)", y="Observed -log10(p)") +
+        theme_bw()
+}
+
+# ----------------------------------------------------
+# 7. input_region 전체 루프 실행
+# ----------------------------------------------------
+unique_regions <- unique(colData(sce_filtered)$input_region)
+
+pdf("/data1/BLA_projection_2/v1_v2/MAST_DEG_region_plots.pdf", width=8, height=6)
+
+for (region in unique_regions) {
+    cat("Processing region:", region, "\n")
+    
+    res <- run_MAST_DEG_region(sce_filtered, covars=c("sample","version"), test_region=region)
+    
+    cat("DEG count (", region, " vs rest):", deg_count(res), "\n")
+    
+    # 플롯
+    vplot <- plot_volcano(res, paste(region, "vs rest"))
+    qplot <- plot_qq(res, paste(region, "vs rest"))
+    
+    print(vplot)
+    print(qplot)
+}
+
+dev.off()
